@@ -1,7 +1,10 @@
 // Heavily borrowed from the gimli simple example
 
 use object::{Object, ObjectSection};
-use std::{borrow, env, fs};
+use std::{
+    borrow::{self, Cow},
+    env, fs,
+};
 
 fn dump_file(object: &object::File, endian: gimli::RunTimeEndian) -> Result<(), gimli::Error> {
     // Load a section and return as `Cow<[u8]>`.
@@ -29,23 +32,39 @@ fn dump_file(object: &object::File, endian: gimli::RunTimeEndian) -> Result<(), 
     // Iterate over the compilation units.
     let mut iter = dwarf.units();
     while let Some(header) = iter.next()? {
-        println!(
-            "Unit at <.debug_info+0x{:x}>",
-            header.offset().as_debug_info_offset().unwrap().0
-        );
         let unit = dwarf.unit(header)?;
 
         // Iterate over the Debugging Information Entries (DIEs) in the unit.
-        let mut depth = 0;
         let mut entries = unit.entries();
-        while let Some((delta_depth, entry)) = entries.next_dfs()? {
-            depth += delta_depth;
-            println!("<{}><{:x}> {}", depth, entry.offset().0, entry.tag());
+        while let Some((_, entry)) = entries.next_dfs()? {
+            if entry.tag() != gimli::DW_TAG_class_type {
+                continue;
+            }
 
             // Iterate over the attributes in the DIE.
             let mut attrs = entry.attrs();
+
+            let mut size: Option<u64> = None;
+            let mut name: Option<Cow<str>> = None;
+
             while let Some(attr) = attrs.next()? {
-                println!("   {}: {:?}", attr.name(), attr.value());
+                match attr.name() {
+                    gimli::DW_AT_name => {
+                        if let gimli::AttributeValue::DebugStrRef(offset) = attr.value() {
+                            if let Ok(s) = dwarf.debug_str.get_str(offset) {
+                                name = Some(s.to_string_lossy());
+                            }
+                        } else {
+                            eprintln!("Unable to get debug str ref")
+                        }
+                    }
+                    gimli::DW_AT_byte_size => size = attr.udata_value(),
+                    _ => continue,
+                }
+            }
+
+            if let (Some(act_size), Some(act_name)) = (size, name) {
+                println!("{} {}", act_name, act_size);
             }
         }
     }
