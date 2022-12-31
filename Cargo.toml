@@ -1,0 +1,9 @@
+[package]
+name = "struct_check"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gimli = "0.27.0"
+memmap2 = "0.5.8"
+object = "0.30.0"
