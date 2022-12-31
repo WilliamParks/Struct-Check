@@ -3,10 +3,23 @@
 use object::{Object, ObjectSection};
 use std::{
     borrow::{self, Cow},
-    env, fs,
+    env, fs, collections::HashMap,
 };
 
-fn dump_file(object: &object::File, endian: gimli::RunTimeEndian) -> Result<(), gimli::Error> {
+// use serde::Deserialize;
+
+// #[derive(Debug, Deserialize)]
+// struct CodeQL_Data {
+//     first_name: String,
+//     last_name: String,
+//     age: u8,
+//     phone_numbers: Vec<String>,
+// }
+
+fn get_dwarf_data(object: object::File, endian: gimli::RunTimeEndian) -> Result<HashMap<String, u64>, gimli::Error> {
+
+    let mut res: HashMap<String, u64> = HashMap::new();
+
     // Load a section and return as `Cow<[u8]>`.
     let load_section = |id: gimli::SectionId| -> Result<borrow::Cow<[u8]>, gimli::Error> {
         match object.section_by_name(id.name()) {
@@ -37,7 +50,7 @@ fn dump_file(object: &object::File, endian: gimli::RunTimeEndian) -> Result<(), 
         // Iterate over the Debugging Information Entries (DIEs) in the unit.
         let mut entries = unit.entries();
         while let Some((_, entry)) = entries.next_dfs()? {
-            if entry.tag() != gimli::DW_TAG_class_type {
+            if entry.tag() != gimli::DW_TAG_class_type && entry.tag() != gimli::DW_TAG_structure_type {
                 continue;
             }
 
@@ -64,26 +77,32 @@ fn dump_file(object: &object::File, endian: gimli::RunTimeEndian) -> Result<(), 
             }
 
             if let (Some(act_size), Some(act_name)) = (size, name) {
-                println!("{} {}", act_name, act_size);
+                // The replace is needed to standardize with CodeQL
+                res.insert(act_name.into_owned().replace(" >", ">"), act_size);
             }
         }
     }
-    Ok(())
+
+    Ok(res)
+}
+
+fn get_codeql_data(_input: String) -> Result<HashMap<String, u64>, gimli::Error> {
+    let res: HashMap<String, u64> = HashMap::new();
+
+    Ok(res)
 }
 
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    if args.len() != 2 {
-        println!("Usage: {} executable", args[0]);
+    if args.len() != 3 {
+        println!("Usage: {} dwarf_filecodeql_json", args[0]);
         return;
     }
 
-    let path = &args[1];
+    let dwarf_path = &args[1];
 
-    println!("Starting dump of {}", path);
-
-    let file = fs::File::open(&path).unwrap();
+    let file = fs::File::open(&dwarf_path).expect("Unable to open DWARF file");
 
     let mmap = unsafe { memmap2::Mmap::map(&file).unwrap() };
     let object = object::File::parse(&*mmap).unwrap();
@@ -92,5 +111,19 @@ fn main() {
     } else {
         gimli::RunTimeEndian::Big
     };
-    dump_file(&object, endian).unwrap();
+    let dwarf_res = get_dwarf_data(object, endian).unwrap();
+
+    println!("Got {} dwarf entries", dwarf_res.len());
+
+    for (key, value) in dwarf_res {
+        println!("{} / {}", key, value);
+    }
+    let codeql_json_path = &args[2];
+
+    let contents = fs::read_to_string(codeql_json_path).expect("Unable to open codeql json file");
+
+    let _ = get_codeql_data(contents);
+
+
+
 }
