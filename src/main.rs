@@ -1,5 +1,4 @@
 // Heavily borrowed from the gimli simple example
-
 use object::{Object, ObjectSection};
 use std::{
     borrow::{self, Cow},
@@ -16,9 +15,8 @@ Example JSON format
    ["NopCrashManager",8]
   ,["CrashManager",8]]}}
 */
-
-fn get_codeql_data(input: String) -> Result<HashMap<String, u64>, gimli::Error> {
-    let mut res: HashMap<String, u64> = HashMap::new();
+fn get_codeql_data(input: String) -> Result<HashMap<String, Vec<u64>>, gimli::Error> {
+    let mut res = HashMap::new();
 
     let codeql_json: serde_json::Value = serde_json::from_str(&input).expect("Bad JSON contents");
 
@@ -32,11 +30,18 @@ fn get_codeql_data(input: String) -> Result<HashMap<String, u64>, gimli::Error> 
 
     for entry in tup_array {
         let indiv_entry = entry.as_array().unwrap();
-        
+
         let name = indiv_entry.get(0).unwrap().as_str().unwrap();
         let size = indiv_entry.get(1).unwrap().as_i64().unwrap();
 
-        res.insert(name.to_string(), size as u64);
+        res.entry(name.to_string())
+            .or_insert(Vec::new())
+            .push(size as u64);
+    }
+
+    for entry in res.iter_mut() {
+        entry.1.sort();
+        entry.1.dedup();
     }
 
     Ok(res)
@@ -45,8 +50,8 @@ fn get_codeql_data(input: String) -> Result<HashMap<String, u64>, gimli::Error> 
 fn get_dwarf_data(
     object: object::File,
     endian: gimli::RunTimeEndian,
-) -> Result<HashMap<String, u64>, gimli::Error> {
-    let mut res: HashMap<String, u64> = HashMap::new();
+) -> Result<HashMap<String, Vec<u64>>, gimli::Error> {
+    let mut res: HashMap<String, Vec<u64>> = HashMap::new();
 
     // Load a section and return as `Cow<[u8]>`.
     let load_section = |id: gimli::SectionId| -> Result<borrow::Cow<[u8]>, gimli::Error> {
@@ -108,9 +113,16 @@ fn get_dwarf_data(
 
             if let (Some(act_size), Some(act_name)) = (size, name) {
                 // The replace is needed to standardize with CodeQL
-                res.insert(act_name.into_owned().replace(" >", ">"), act_size);
+                res.entry(act_name.into_owned().replace(" >", ">"))
+                    .or_insert(Vec::new())
+                    .push(act_size);
             }
         }
+    }
+
+    for entry in res.iter_mut() {
+        entry.1.sort();
+        entry.1.dedup();
     }
 
     Ok(res)
@@ -141,7 +153,8 @@ fn main() {
 
     let codeql_json_path = &args[2];
 
-    let codeql_contents = fs::read_to_string(codeql_json_path).expect("Unable to open codeql json file");
+    let codeql_contents =
+        fs::read_to_string(codeql_json_path).expect("Unable to open codeql json file");
 
     let codeql_map = get_codeql_data(codeql_contents).unwrap();
 
@@ -152,12 +165,11 @@ fn main() {
     for (k, v) in &dwarf_map {
         if let Some(codeql_v) = codeql_map.get(k) {
             if *codeql_v != *v {
-                println!("Mismatch {} {} {}", k, v, codeql_v);
+                println!("Mismatch {} {:?} {:?}", k, v, codeql_v);
             } else {
                 count += 1;
             }
         }
     }
     println!("Matched {}", count);
-
 }
