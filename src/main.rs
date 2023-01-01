@@ -3,21 +3,49 @@
 use object::{Object, ObjectSection};
 use std::{
     borrow::{self, Cow},
-    env, fs, collections::HashMap,
+    collections::HashMap,
+    env, fs,
 };
 
-// use serde::Deserialize;
+/*
+Example JSON format
+{"#select":{"columns":[
+   {"kind":"String"}
+  ,{"kind":"Integer"}]
+ ,"tuples":[
+   ["NopCrashManager",8]
+  ,["CrashManager",8]]}}
+*/
 
-// #[derive(Debug, Deserialize)]
-// struct CodeQL_Data {
-//     first_name: String,
-//     last_name: String,
-//     age: u8,
-//     phone_numbers: Vec<String>,
-// }
+fn get_codeql_data(input: String) -> Result<HashMap<String, u64>, gimli::Error> {
+    let mut res: HashMap<String, u64> = HashMap::new();
 
-fn get_dwarf_data(object: object::File, endian: gimli::RunTimeEndian) -> Result<HashMap<String, u64>, gimli::Error> {
+    let codeql_json: serde_json::Value = serde_json::from_str(&input).expect("Bad JSON contents");
 
+    let tup_array = codeql_json
+        .get("#select")
+        .expect("Bad JSON first level")
+        .get("tuples")
+        .expect("Bad JSON second level")
+        .as_array()
+        .unwrap();
+
+    for entry in tup_array {
+        let indiv_entry = entry.as_array().unwrap();
+        
+        let name = indiv_entry.get(0).unwrap().as_str().unwrap();
+        let size = indiv_entry.get(1).unwrap().as_i64().unwrap();
+
+        res.insert(name.to_string(), size as u64);
+    }
+
+    Ok(res)
+}
+
+fn get_dwarf_data(
+    object: object::File,
+    endian: gimli::RunTimeEndian,
+) -> Result<HashMap<String, u64>, gimli::Error> {
     let mut res: HashMap<String, u64> = HashMap::new();
 
     // Load a section and return as `Cow<[u8]>`.
@@ -50,7 +78,9 @@ fn get_dwarf_data(object: object::File, endian: gimli::RunTimeEndian) -> Result<
         // Iterate over the Debugging Information Entries (DIEs) in the unit.
         let mut entries = unit.entries();
         while let Some((_, entry)) = entries.next_dfs()? {
-            if entry.tag() != gimli::DW_TAG_class_type && entry.tag() != gimli::DW_TAG_structure_type {
+            if entry.tag() != gimli::DW_TAG_class_type
+                && entry.tag() != gimli::DW_TAG_structure_type
+            {
                 continue;
             }
 
@@ -86,12 +116,6 @@ fn get_dwarf_data(object: object::File, endian: gimli::RunTimeEndian) -> Result<
     Ok(res)
 }
 
-fn get_codeql_data(_input: String) -> Result<HashMap<String, u64>, gimli::Error> {
-    let res: HashMap<String, u64> = HashMap::new();
-
-    Ok(res)
-}
-
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -111,19 +135,29 @@ fn main() {
     } else {
         gimli::RunTimeEndian::Big
     };
-    let dwarf_res = get_dwarf_data(object, endian).unwrap();
+    let dwarf_map = get_dwarf_data(object, endian).unwrap();
 
-    println!("Got {} dwarf entries", dwarf_res.len());
+    println!("Got {} dwarf entries", dwarf_map.len());
 
-    for (key, value) in dwarf_res {
-        println!("{} / {}", key, value);
-    }
     let codeql_json_path = &args[2];
 
-    let contents = fs::read_to_string(codeql_json_path).expect("Unable to open codeql json file");
+    let codeql_contents = fs::read_to_string(codeql_json_path).expect("Unable to open codeql json file");
 
-    let _ = get_codeql_data(contents);
+    let codeql_map = get_codeql_data(codeql_contents).unwrap();
 
+    println!("Got {} CodeQL entries", codeql_map.len());
 
+    let mut count = 0;
+
+    for (k, v) in &dwarf_map {
+        if let Some(codeql_v) = codeql_map.get(k) {
+            if *codeql_v != *v {
+                println!("Mismatch {} {} {}", k, v, codeql_v);
+            } else {
+                count += 1;
+            }
+        }
+    }
+    println!("Matched {}", count);
 
 }
